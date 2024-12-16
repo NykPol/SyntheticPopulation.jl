@@ -53,10 +53,11 @@ Adds useful categorical flags to the `aggregated_individuals` DataFrame, determi
 """
 function add_individual_flags(aggregated_individuals::DataFrame)
     aggregated_individuals = copy(aggregated_individuals)
-    aggregated_individuals[!, "is_adult"] = aggregated_individuals[!, AGE_COLUMN] .>= MINIMUM_ADULT_AGE
-    aggregated_individuals[!, "is_potential_parent"] = (aggregated_individuals[!, "is_adult"] .== true) .&& (aggregated_individuals[!, MARITALSTATUS_COLUMN] .== AVAILABLE_FOR_MARRIAGE)
-    # Tak warunek wyglada obecnie w kodzie. Divorced osoba w wieku 60 lat nadaje sie do bycia child
-    aggregated_individuals[!, "is_potential_child"] = (aggregated_individuals[!, "is_adult"] .== false) .|| (aggregated_individuals[!, MARITALSTATUS_COLUMN] .!= AVAILABLE_FOR_MARRIAGE)
+    aggregated_individuals[!, "is_adult"] = float.(aggregated_individuals[!, AGE_COLUMN] .>= MINIMUM_ADULT_AGE)
+    aggregated_individuals[!, "is_potential_child"] = float.((aggregated_individuals[!, "is_adult"] .== false) .|| (aggregated_individuals[!, MARITALSTATUS_COLUMN] .!= AVAILABLE_FOR_MARRIAGE) .&& aggregated_individuals[!, AGE_COLUMN] .< MINIMUM_ADULT_AGE + 40)
+    aggregated_individuals[!, "is_married_male"] = float.((coalesce.(aggregated_individuals[!, MARITALSTATUS_COLUMN], "") .== AVAILABLE_FOR_MARRIAGE) .&& (aggregated_individuals[!, SEX_COLUMN] .== 'M'))
+    aggregated_individuals[!, "is_married_female"] = float.((coalesce.(aggregated_individuals[!, MARITALSTATUS_COLUMN], "") .== AVAILABLE_FOR_MARRIAGE) .&& (aggregated_individuals[!, SEX_COLUMN] .== 'F'))
+    aggregated_individuals[!, "is_potential_parent"] = float.((aggregated_individuals[!, "is_married_male"] .== true) .|| (aggregated_individuals[!, "is_married_female"] .== true))
     return aggregated_individuals
 end
 
@@ -84,86 +85,51 @@ function add_indices_range_to_hh(aggregated_households::DataFrame)
 end
 
 """
-    prep_group_indices_for_indv_constraints(aggregated_individuals::DataFrame)
+    disaggr_ipf_individuals(aggregated_individuals::DataFrame) -> DataFrame
 
-Processes individual-level constraints from an aggregated DataFrame by extracting indices based on demographic and relational characteristics such as age, marital status, and parental status.
+Disaggregates a DataFrame of aggregated individuals into individual records based on the population count for each group.
 
-# Arguments
-- `aggregated_individuals::DataFrame`: A DataFrame containing individual data.
+### Arguments
+- `aggregated_individuals::DataFrame`: A DataFrame containing aggregated data for different groups. The DataFrame must have at least a `population` column indicating the number of individuals in each group.
 
-# Returns
-A tuple containing:
-- `adult_indices::Vector{Int}`: Vector of indices for adults.
-- `married_male_indices::Vector{Int}`: Vector of indices for married males.
-- `married_female_indices::Vector{Int}`: Vector of indices for married females.
-- `parent_indices::Vector{Int}`: Vector of indices for potential parents.
-- `child_indices::Vector{Int}`: Vector of indices for potential children.
-- `individuals_age_vect::Vector{Int}``: Vector of individuals age.
+### Returns
+- A DataFrame where each row corresponds to an individual.
+
+### Details
+- Groups with a population of zero or missing are skipped.
+- The `id` column will be generated as a new sequential identifier for each individual.
+- The function will ensure that the column types across the disaggregated DataFrame are consistent using `promote=true` when appending new rows.
 """
-function prep_group_indices_for_indv_constraints(aggregated_individuals::DataFrame)
-    # adult_indices
-    filtered_df = filter(row -> row.is_adult == true, aggregated_individuals)
-    adult_indices = reduce(vcat, [collect(r) for r in filtered_df[!, "indiv_indices"]])
 
-    # married_male_indices
-    filtered_df = filter(row ->  coalesce(row[SEX_COLUMN] == 'M', false) && coalesce(row[MARITALSTATUS_COLUMN] == AVAILABLE_FOR_MARRIAGE, false) && row.is_adult == true, aggregated_individuals)
-    married_male_indices = reduce(vcat, [collect(r) for r in filtered_df[!, "indiv_indices"]])
+function disaggr_ipf_individuals(aggregated_individuals::DataFrame)
+    # Create an empty DataFrame to store disaggregated individuals
+    disaggregated_individuals = DataFrame()
 
-    # married_female_indice
-    filtered_df = filter(row ->  coalesce(row[SEX_COLUMN] == 'F', false) && coalesce(row[MARITALSTATUS_COLUMN] == AVAILABLE_FOR_MARRIAGE, false) && row.is_adult == true, aggregated_individuals)
-    married_female_indices = reduce(vcat, [collect(r) for r in filtered_df[!, "indiv_indices"]])
+    # Loop over each row in aggregated_individuals
+    for row in eachrow(aggregated_individuals)
+        # Get the number of individuals in this group
+        pop = row[:population]
+        
+        # Skip rows with missing or zero population
+        if isnothing(pop) || pop == 0
+            continue
+        end
+        
+        # Create expanded rows for the current group
+        expanded_rows = DataFrame(NamedTuple(
+            (Symbol(col) => repeat([row[col]], pop) for col in names(aggregated_individuals))
+        ))
+        
+        # Ensure column types match across DataFrames (use promote=true)
+        append!(disaggregated_individuals, expanded_rows; promote=true)
+    end
 
-    # parent_indices
-    filtered_df = filter(row -> row.is_potential_parent == true, aggregated_individuals)
-    parent_indices = reduce(vcat, [collect(r) for r in filtered_df[!, "indiv_indices"]])
+    rename!(disaggregated_individuals, :id => :agg_ind_id)
+    disaggregated_individuals[!, "id"] .= 1:nrow(disaggregated_individuals)
+    select!(disaggregated_individuals, Not([:population, :cum_population, :indiv_indices]))   
 
-
-    # child_indices
-    filtered_df = filter(row -> row.is_potential_child == true, aggregated_individuals)
-    child_indices = reduce(vcat, [collect(r) for r in filtered_df[!, "indiv_indices"]])
-
-    # age vector
-    individuals_age_vect = reduce(vcat, [fill(size, length(r)) for (size, r) in zip(aggregated_individuals[!, "age"], aggregated_individuals[!, "indiv_indices"])])
-
-    return adult_indices, married_male_indices, married_female_indices, parent_indices, child_indices, individuals_age_vect
+    return disaggregated_individuals
 end
-
-
-"""
-    prep_group_indices_for_hh_constraints(aggregated_households::DataFrame)
-
-Prepares and organizes household indices by household size, based on a provided DataFrame of aggregated household data.
-
-# Arguments
-- `aggregated_households::DataFrame`: A DataFrame containing household data.
-
-# Returns
-A tuple containing:
-- `hh_size1_indices::Vector{Int}`: Vector of indices for households of size 1.
-- `hh_size2_indices::Vector{Int}`: Vector of indices for households of size 2.
-- `hh_size3plus_indices::Vector{Int}`: Vector of indices for households of size 3 or more.
-- `hh_capacity::Vector{Int}`: Vector indicating the household sizes for each index.
-"""
-function prep_group_indices_for_hh_constraints(aggregated_households::DataFrame)
-
-    # hh_size1_indices
-    filtered_df = filter(row -> row[HOUSEHOLD_SIZE_COLUMN] == 1, aggregated_households)
-    hh_size1_indices = reduce(vcat, [collect(r) for r in filtered_df[!, "hh_indices"]])
-
-    # hh_size2_indices
-    filtered_df = filter(row -> row[HOUSEHOLD_SIZE_COLUMN] == 2, aggregated_households)
-    hh_size2_indices = reduce(vcat, [collect(r) for r in filtered_df[!, "hh_indices"]])
-
-    # hh_size3plus_indices
-    filtered_df = filter(row -> row[HOUSEHOLD_SIZE_COLUMN] >= 3, aggregated_households)
-    hh_size3plus_indices = reduce(vcat, [collect(r) for r in filtered_df[!, "hh_indices"]])
-
-    # hh_capacity
-    hh_capacity = reduce(vcat, [fill(size, length(r)) for (size, r) in zip(aggregated_households[!, HOUSEHOLD_SIZE_COLUMN], aggregated_households[!, "hh_indices"])])
-
-    return hh_size1_indices, hh_size2_indices, hh_size3plus_indices, hh_capacity
-end
-
 
 """
     define_and_run_optimization(aggregated_individuals::DataFrame,
@@ -190,123 +156,169 @@ Run an optimization linear programming model to allocate individuals to househol
 - `adult_indices::Vector{Int}`: Indices of individuals classified as adults.
 - `married_male_indices::Vector{Int}`: Indices of married male individuals.
 - `married_female_indices::Vector{Int}`: Indices of married female individuals.
-- `parent_indices::Vector{Int}`: Indices of individuals classified as parents.
 - `child_indices::Vector{Int}`: Indices of individuals classified as children.
 
 # Returns
 - `Matrix{Float64}`: A vector containing the allocation results, where each element indicates the household assigned to each individual. If an individual is not allocated to any household, the entry will be `missing`.
 """
-function define_and_run_optimization(aggregated_individuals::DataFrame
-                                    , aggregated_households::DataFrame
+function define_and_run_optimization(disaggregated_ipf_individuals::DataFrame, hh_capacity::Vector{Int})
+    # Optimization
+    # Define data structures for optimization
 
-                                    , hh_size1_indices::Vector{Int}
-                                    , hh_size2_indices::Vector{Int}
-                                    , hh_size3plus_indices::Vector{Int}
-                                    , hh_capacity::Vector{Int}
-
-                                    , adult_indices::Vector{Int}
-                                    , married_male_indices::Vector{Int}
-                                    , married_female_indices::Vector{Int}
-                                    , parent_indices::Vector{Int}
-                                    , child_indices::Vector{Int}
-                                    , age_vector::Vector{Int}
-                                    )
-    println("1")
+    # Total n
+    n_hh = Int(length(hh_capacity))
+    n_indiv = Int(nrow(disaggregated_ipf_individuals))
+    n_potential_children = Int(sum(disaggregated_ipf_individuals[!,"is_potential_child"]))
+    println("N households: ", n_hh)
+    println("N invididuals: ", n_indiv)
+    println("N potential children: ", n_potential_children)
     flush(stdout)
+
+    # Vectors
+    is_potential_child = Vector{Float64}(disaggregated_ipf_individuals[!,"is_potential_child"])
+    is_married_male = Vector{Float64}(disaggregated_ipf_individuals[!,"is_married_male"])
+    is_married_female = Vector{Float64}(disaggregated_ipf_individuals[!,"is_married_female"])
+    is_potential_parent = Vector{Float64}(disaggregated_ipf_individuals[!,"is_potential_parent"])
+    is_adult = Vector{Float64}(disaggregated_ipf_individuals[!,"is_adult"])
+    age_vector = Vector{Float64}(float.(disaggregated_ipf_individuals[!,"age"]))
+    println("Vectors are defined")
+    flush(stdout)
+
     # Create a new optimization mode
-
     model = Model(HiGHS.Optimizer)
-    set_attribute(model, "mip_rel_gap", 0.3)
+    set_attribute(model, "mip_rel_gap", 0.01)
     set_attribute(model, "mip_heuristic_effort", 0.25)
-
-    # model = Model(Cbc.Optimizer)
-    # set_attribute(model, "ratioGap", 0.15)
-    # set_attribute(model, "threads", 4)
-    # set_attribute(model, "seconds", 600.0)
-    println("2")
+    println("Optimization model is defined")
     flush(stdout)
+
     # Define decision variables: a binary allocation matrix where
     # allocation[i, j] indicates whether individual i is assigned to household j
-    n_hh = sum(aggregated_households[!,POPULATION_COLUMN])
-    n_indiv = sum(aggregated_individuals[!,POPULATION_COLUMN])
     @variable(model, allocation[1:n_indiv, 1:n_hh], Bin, start = 0)
     @variable(model, 0 <= household_inhabited[1:n_hh]  <= 1, start = 0 )
-    @variable(model, 0 <= household_married_male[1:n_hh]  <= 1, start = 0 )
-    @variable(model, 0 <= household_married_female[1:n_hh]  <= 1, start = 0 )
-    @variable(model, male_parent_relaxation[child_indices, 1:n_hh], Bin, start = 0)
-    @variable(model, female_parent_relaxation[child_indices, 1:n_hh], Bin, start = 0)
-    @variable(model, penalty[1:n_hh], Int, lower_bound=0, start = 0)
-    println("3")
+    @variable(model, 0 <= household_married_male_inhabited[1:n_hh]  <= 1, start = 0 )
+    @variable(model, 0 <= household_married_female_inhabited[1:n_hh]  <= 1, start = 0 )
+    @variable(model, 0 <= household_children_inhabited[1:n_hh]  <= 1, start = 0 )
+    #@variable(model, male_parent_relaxation[1:n_potential_children, 1:n_hh], Bin, start = 0)
+    #@variable(model, female_parent_relaxation[1:n_potential_children, 1:n_hh], Bin, start = 0)
+    #@variable(model, penalty[1:n_hh], Int, lower_bound=0, start = 0)
+    println("Decision variables are defined")
     flush(stdout)
+
+
     # Define the objective function: maximize the total number of assigned individuals
-    @objective(model, Max, sum(allocation) - 10*sum(penalty) - 0.001*sum(female_parent_relaxation) - 0.001*sum(male_parent_relaxation))
-    println("4")
+    @objective(model, Max, sum(allocation))
+    println("Objective function is defined")
     flush(stdout)
+
     # Add constraints to the model
     println("---------------")
     flush(stdout)
+
+
     # Each individual can only be assigned to one household
-    @constraint(model, [i=1:size(allocation, 1)], sum(allocation[i, j] for j in 1:size(allocation, 2)) <= 1)
-    println("1")
+    @constraint(model, allocation * ones(n_hh,1) .<= 1)
+    println("Constraint *Each individual can only be assigned to one household* is defined")
     flush(stdout)
+
     # Any individual added to a household makes it inhabited
     @constraint(model, [hh_id = 1:n_hh], household_inhabited[hh_id] .>= allocation[:, hh_id])
-    println("2")
+    println("Constraint *Any individual added to a household makes it inhabited* is defined")
     flush(stdout)
-    # Any household must meet its capacity
-    @constraint(model, [hh_id = 1:n_hh], sum(allocation[:, hh_id]) .== hh_capacity[hh_id] * household_inhabited[hh_id])
-    println("3")
+
+    # Any children added to the household makes it children inhabited
+    @constraint(model, [hh_id = 1:n_hh], household_children_inhabited[hh_id] .>= allocation[:, hh_id] .* is_potential_child)
+    println("Constraint *Any children added to the household makes it children inhabited* is defined")
     flush(stdout)
+
+    # Any married female added to the household makes it inhabited
+    @constraint(model, [hh_id = 1:n_hh], household_married_female_inhabited[hh_id] .>= allocation[:, hh_id] .* is_married_female)
+    @constraint(model, household_married_female_inhabited .<= allocation' * is_married_female)
+    println("Constraint *Any children added to the household makes it children inhabited* is defined")
+    flush(stdout)
+
+    # Any married male added to the household makes it inhabited
+    @constraint(model, [hh_id = 1:n_hh], household_married_male_inhabited[hh_id] .>= allocation[:, hh_id] .* is_married_male)
+    @constraint(model, household_married_male_inhabited .<= allocation' * is_married_male)
+    println("Constraint *Any children added to the household makes it children inhabited* is defined")
+    flush(stdout)
+
     # Any active household must have at least 1 adult
-    @constraint(model, [hh_id = 1:n_hh], sum(allocation[adult_indices, hh_id]) >= household_inhabited[hh_id])
-    println("4")
-    flush(stdout)
-    # Any household cannot have more than 1 married male
-    @constraint(model, [hh_id = 1:n_hh], household_married_male[hh_id] .>= allocation[married_male_indices, hh_id])
-    @constraint(model, [hh_id = 1:n_hh], sum(allocation[married_male_indices, hh_id]) .<= household_married_male[hh_id])
-    println("5")
-    flush(stdout)
-    # Any household cannot have more than 1 married female
-    @constraint(model, [hh_id = 1:n_hh], household_married_female[hh_id] .>= allocation[married_female_indices, hh_id])
-    @constraint(model, [hh_id = 1:n_hh], sum(allocation[married_female_indices, hh_id]) .<= household_married_female[hh_id])
-    println("6")
-    flush(stdout)
-    # Children could be only in a household that has at least one a parent
-    @constraint(model, [hh_id = 1:n_hh], allocation[child_indices, hh_id] .<= household_married_female[hh_id] + household_married_male[hh_id])
-    # Number of children cannot exceed hh_capacity - parents
-    @constraint(model, [hh_id = 1:n_hh], sum(allocation[child_indices, hh_id]) .<= hh_capacity[hh_id] - household_married_female[hh_id] - household_married_male[hh_id])
-    println("7")
-    flush(stdout)
-    # Age difference between parents not bigger than 5 years
-    @constraint(model, [hh_id = 1:n_hh], sum(allocation[married_female_indices, hh_id] .* age_vector[married_female_indices]) - sum(allocation[married_male_indices, hh_id] .* age_vector[married_male_indices]) <= 5 + 100*(2 - household_married_male[hh_id] - household_married_female[hh_id] + penalty[hh_id]))
-    @constraint(model, [hh_id = 1:n_hh], sum(allocation[married_male_indices, hh_id] .* age_vector[married_male_indices]) - sum(allocation[married_female_indices, hh_id] .* age_vector[married_female_indices]) <= 5 + 100*(2 - household_married_male[hh_id] - household_married_female[hh_id] + penalty[hh_id]))
-    println("8")
-    flush(stdout)
-
-    # Age difference between each child and male parent (married_male_indices) is less than 40 years     
-    @constraint(model, [child_id in child_indices, hh_id in 1:n_hh, male_parent_id in married_male_indices],
-        allocation[child_id, hh_id] * (age_vector[male_parent_id] - age_vector[child_id]) <= 40 + 100*(1-allocation[male_parent_id, hh_id] + male_parent_relaxation[child_id, hh_id]))
-
-    @constraint(model, [child_id in child_indices, hh_id in 1:n_hh, female_parent_id in married_female_indices],
-        allocation[child_id, hh_id] * (age_vector[female_parent_id] - age_vector[child_id]) <= 40 + 100*(1-allocation[female_parent_id, hh_id] + female_parent_relaxation[child_id, hh_id]))
-
-    @constraint(model, [child_id in child_indices, hh_id in 1:n_hh, male_parent_id in married_male_indices],
-        allocation[child_id, hh_id] * (age_vector[male_parent_id] - age_vector[child_id]) >= 15*allocation[child_id, hh_id] )
-
-    @constraint(model, [child_id in child_indices, hh_id in 1:n_hh, female_parent_id in married_female_indices],
-        allocation[child_id, hh_id] * (age_vector[female_parent_id] - age_vector[child_id]) >= 15*allocation[child_id, hh_id] )
-    println("9")
-    flush(stdout)
-    # If there is only one parent then no relaxation could be applied
-    @constraint(model, [child_id in child_indices, hh_id in 1:n_hh],
-    male_parent_relaxation[child_id, hh_id] + female_parent_relaxation[child_id, hh_id] <= household_married_female[hh_id])
-
-    @constraint(model, [child_id in child_indices, hh_id in 1:n_hh],
-    male_parent_relaxation[child_id, hh_id] + female_parent_relaxation[child_id, hh_id] <= household_married_male[hh_id])
     
-
-    println("OPTIMIZATION START")
+    println("Constraint *Any active household must have at least 1 adult* is defined")
     flush(stdout)
+
+    # # Any individual added to a household makes it inhabited
+    # @constraint(model, household_inhabited .>= allocation' * ones(n_indiv,1))
+    # println("Constraint *Any individual added to a household makes it inhabited* is defined")
+    # flush(stdout)
+
+    # Any household must meet its capacity
+    @constraint(model, allocation' * ones(n_indiv,1) .== hh_capacity .* household_inhabited)
+    println("Constraint *Any household must meet its capacity* is defined")
+    flush(stdout)
+
+    # Any active household must have at least 1 adult
+    @constraint(model, allocation' * is_adult .>= household_inhabited)
+    println("Constraint *Any active household must have at least 1 adult* is defined")
+    flush(stdout)
+
+    # Any household cannot have more than 1 married male
+    @constraint(model, allocation' * is_married_male .<= household_married_male_inhabited)
+    println("Constraint *Any household cannot have more than 1 married male* is defined")
+    flush(stdout)
+
+    # Any household cannot have more than 1 married female
+    @constraint(model, allocation' * is_married_female .<= household_married_female_inhabited)
+    println("Constraint *Any household cannot have more than 1 married female* is defined")
+    flush(stdout)
+
+    # Children could be only in a household that has at least one parent
+    @constraint(model, household_children_inhabited .<= household_married_female_inhabited + household_married_male_inhabited)
+    println("Constraint *Children could be only in a household that has at least one parent* is defined")
+    flush(stdout)
+
+    # Number of children cannot exceed hh_capacity - parents
+    @constraint(model, allocation' * is_potential_child .<= hh_capacity .- household_married_female_inhabited .- household_married_male_inhabited)
+    println("Constraint *Number of children cannot exceed hh_capacity - parents* is defined")
+    flush(stdout)
+
+    # Optimize the model to find the best allocation of individuals to households
+    optimize!(model)
+    println("Objective value: ", objective_value(model))
+    flush(stdout)
+
+    
+    # # Age difference between parents not bigger than 5 years
+    # @constraint(model, [hh_id = 1:n_hh], sum(allocation[married_female_indices, hh_id] .* age_vector[married_female_indices]) - sum(allocation[married_male_indices, hh_id] .* age_vector[married_male_indices]) <= 5 + 100*(2 - household_married_male[hh_id] - household_married_female[hh_id] + penalty[hh_id]))
+    # @constraint(model, [hh_id = 1:n_hh], sum(allocation[married_male_indices, hh_id] .* age_vector[married_male_indices]) - sum(allocation[married_female_indices, hh_id] .* age_vector[married_female_indices]) <= 5 + 100*(2 - household_married_male[hh_id] - household_married_female[hh_id] + penalty[hh_id]))
+    # @constraint(model, [hh_id = 1:n_hh], sum(allocation[child_indices, hh_id]) .<= hh_capacity[hh_id] - household_married_female[hh_id] - household_married_male[hh_id])
+    # println("Constraint *Age difference between parents not bigger than 5 years* is defined")
+    # flush(stdout)
+
+    # # Age difference between each child and parent must be more than 15 years and with at least one parent must be less than 40 years   
+    # @constraint(model, [child_id in child_indices, hh_id in 1:n_hh, male_parent_id in married_male_indices],
+    #     allocation[child_id, hh_id] * (age_vector[male_parent_id] - age_vector[child_id]) <= 40 + 100*(1-allocation[male_parent_id, hh_id] + male_parent_relaxation[child_id, hh_id]))
+
+    # @constraint(model, [child_id in child_indices, hh_id in 1:n_hh, female_parent_id in married_female_indices],
+    #     allocation[child_id, hh_id] * (age_vector[female_parent_id] - age_vector[child_id]) <= 40 + 100*(1-allocation[female_parent_id, hh_id] + female_parent_relaxation[child_id, hh_id]))
+
+    # @constraint(model, [child_id in child_indices, hh_id in 1:n_hh, male_parent_id in married_male_indices],
+    #     allocation[child_id, hh_id] * (age_vector[male_parent_id] - age_vector[child_id]) >= 15*allocation[child_id, hh_id] )
+
+    # @constraint(model, [child_id in child_indices, hh_id in 1:n_hh, female_parent_id in married_female_indices],
+    #     allocation[child_id, hh_id] * (age_vector[female_parent_id] - age_vector[child_id]) >= 15*allocation[child_id, hh_id] )
+
+
+    # # If there is only one parent then no relaxation could be applied
+    # @constraint(model, [child_id in child_indices, hh_id in 1:n_hh],
+    # male_parent_relaxation[child_id, hh_id] + female_parent_relaxation[child_id, hh_id] <= household_married_female[hh_id])
+
+    # @constraint(model, [child_id in child_indices, hh_id in 1:n_hh],
+    # male_parent_relaxation[child_id, hh_id] + female_parent_relaxation[child_id, hh_id] <= household_married_male[hh_id])
+    
+    # println("Constraint *Age difference between each child and parent must be more than 15 years and with at least one parent must be less than 40 years* is defined")
+    # flush(stdout)
+
     # Optimize the model to find the best allocation of individuals to households
     optimize!(model)
     println("Objective value: ", objective_value(model))
@@ -315,13 +327,13 @@ function define_and_run_optimization(aggregated_individuals::DataFrame
     # Retrieve the allocation results from the model
     allocation_values = value.(allocation)
     household_inhabited = value.(household_inhabited)
-    household_married_male = value.(household_married_male)
-    household_married_female = value.(household_married_female)
-    penalty = value.(penalty)
-    female_parent_relaxation = value.(female_parent_relaxation)
-    male_parent_relaxation = value.(male_parent_relaxation)
+    household_married_male_inhabited = value.(household_married_male_inhabited)
+    household_married_female_inhabited = value.(household_married_female_inhabited)
+    # penalty = value.(penalty)
+    # female_parent_relaxation = value.(female_parent_relaxation)
+    # male_parent_relaxation = value.(male_parent_relaxation)
 
-    return allocation_values, household_inhabited, household_married_male, household_married_female, penalty, female_parent_relaxation, male_parent_relaxation  # Return the allocation matrix
+    return allocation_values, household_inhabited, household_married_male_inhabited, household_married_female_inhabited, household_children_inhabited
 end
 
 
@@ -413,6 +425,7 @@ function disaggr_optimized_hh(allocation_values::Matrix{Float64}, aggregated_hou
                 aggregated_individuals[individual_id, :id]
         elseif length(assigned_individuals) >= 2
             println(household_id)
+            println("----")
             parents = intersect(assigned_individuals, parent_indices)
             individual_id = findrow(cumulative_population_ind, parents[1])
             disaggregated_households[household_id, :head_id] =

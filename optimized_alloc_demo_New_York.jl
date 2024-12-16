@@ -5,10 +5,8 @@ using Revise
 using DataFrames
 using SyntheticPopulation
 
-
-
 #each individual and each household represent 100.000 individuals or households
-SCALE = 0.01
+SCALE = 0.00003
 
 #all values are based on China census data
 individual_popoulation_size = 8258035
@@ -69,7 +67,7 @@ marginal_ind_sex_maritalstatus = DataFrame(
     maritalstatus = repeat(["Never_married", "Married", "Divorced", "Widowed"], inner = 2), 
     population = SCALE .* [1469519, 1536292, 1515237, 1470917, 205732, 341398, 75108, 286919]
     )
-     
+
 # 0.835 is a share of pop ages > [2, 7, 12]
 marginal_ind_income = DataFrame(
     income = [9999, 14999, 24999, 34999, 49999, 64999, 74999, 99999, 100000], 
@@ -89,35 +87,40 @@ filter!(row -> row[SyntheticPopulation.POPULATION_COLUMN] >= 1, aggregated_indiv
 aggregated_individuals.id = 1:nrow(aggregated_individuals)
 aggregated_individuals = add_indices_range_to_indiv(aggregated_individuals)
 aggregated_individuals = add_individual_flags(aggregated_individuals)
-adult_indices, married_male_indices, married_female_indices, parent_indices, child_indices, age_vector = prep_group_indices_for_indv_constraints(aggregated_individuals);
-aggregated_individuals[rand(1:nrow(aggregated_individuals), 10), :]
+disaggregated_ipf_individuals = disaggr_ipf_individuals(aggregated_individuals)              
 
 
 #generation of dataframe of households
 aggregated_households = generate_joint_distribution(marginal_hh_size)
 aggregated_households = add_indices_range_to_hh(aggregated_households)
-hh_size1_indices, hh_size2_indices, hh_size3plus_indices, hh_capacity = prep_group_indices_for_hh_constraints(aggregated_households);
+hh_capacity = reduce(vcat, [fill(size, length(r)) for (size, r) in zip(aggregated_households[!, SyntheticPopulation.HOUSEHOLD_SIZE_COLUMN], aggregated_households[!, "hh_indices"])])
 
-# Optimization
-allocation_values, household_inhabited, household_married_male, household_married_female, penalty, female_parent_relaxation, male_parent_relaxation = define_and_run_optimization(aggregated_individuals
-    , aggregated_households
-    
-    , hh_size1_indices
-    , hh_size2_indices
-    , hh_size3plus_indices
-    , hh_capacity
+allocation_values, household_inhabited, household_married_male_inhabited, household_married_female_inhabited, household_children_inhabited = define_and_run_optimization(disaggregated_ipf_individuals, hh_capacity);  
 
-    , adult_indices
-    , married_male_indices
-    , married_female_indices
-    , parent_indices
-    , child_indices
-    , age_vector);  
 
+# -----HELPER
+# Example data
+# indiv_household = [1 0; 1 0; 1 0; 0 1; 0 1; 0 1; 1 0; 1 0; 0 1; 0 1]  # 10x2 matrix (individual to household)
+# adult = [1, 0, 1, 0, 1, 0, 1, 1, 0, 1]  # 10x1 vector (0 = not adult, 1 = adult)
+
+# indiv_household' * ones(10,1)
+# # Matrix multiplication: Multiply the indiv_household matrix (10x2) with the adult vector (10x1)
+# adult_sum_by_household = indiv_household * ones(2,1)  # Result is a 2x1 vector
+# indiv_household
+# # Output the result
+# println("Sum of adults in each household: ", adult_sum_by_household)
+#---------
+
+filter(row -> coalesce(row.household_id, 999) == 999, disaggregated_individuals)
 disaggregated_individuals = disaggr_optimized_indiv(allocation_values, aggregated_individuals)
-disaggregated_households = disaggr_optimized_hh(allocation_values, aggregated_households, aggregated_individuals, parent_indices)
+disaggregated_households = disaggr_optimized_hh(allocation_values, aggregated_households, aggregated_individuals, filter(row -> row.is_potential_parent == true, disaggregated_ipf_individuals)[!, "id"])
+disaggregated_households
+value.(household_married_female_inhabited)[54]
+value.(household_married_male_inhabited)[54]
 
+filter(row -> coalesce(row.household_id, 999) == 54, disaggregated_individuals)
 
+filter(row -> row.id == 66, aggregated_individuals)
 # Define a function to perform the join for each role (head, partner, child1, etc.)
 function join_individual_data(households_df, individuals_df, role_id::Symbol, suffix::String)
 

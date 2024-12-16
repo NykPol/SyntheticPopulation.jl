@@ -18,6 +18,7 @@ export disaggr_optimized_hh
 export assign_areas_to_households!
 export download_osm_boundaries
 export findrow
+export disaggr_ipf_individuals
 
 
 
