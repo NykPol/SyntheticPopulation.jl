@@ -22,10 +22,14 @@ function fit_ipf(dfs_for_ipf::Dict{String,DataFrame}; ipf_population::String)
     ipf_df1 = dfs_for_ipf["ipf_df1"]
     ipf_df2 = dfs_for_ipf["ipf_df2"]
 
+    println("ipf_merged_attributes: ", ipf_merged_attributes)
+    println("ipf_df1: ", ipf_df1)
+    println("ipf_df2: ", ipf_df2)
+
     #initialize sample matrix as seed for IPF
     input_sample =
         reshape(ipf_merged_attributes.:compute_ipf, (nrow(ipf_df1), nrow(ipf_df2)))
-
+    println("input_sample: ", input_sample)
     #initiate input marginal distributions for IPF
     input_marginals = vcat([ipf_df1[:, POPULATION_COLUMN]], [ipf_df2[:, POPULATION_COLUMN]])
     population_size_difference =
@@ -59,10 +63,12 @@ function fit_ipf(dfs_for_ipf::Dict{String,DataFrame}; ipf_population::String)
         Z = population_size .* Z
         Z = Int.(round.(Z)) #error alert: if the numbers are low, some numbers can be rounded to 0. e.g. total will be 10 instead of 15
     end
-
+    println("Z: ", Z)
     #generate output df from ipf
     joint_distribution = copy(ipf_merged_attributes)
+    println("joint_distribution: ", joint_distribution)
     joint_distribution[:, POPULATION_COLUMN] = vec(Z)
+    println("vec(Z): ", vec(Z))
     joint_distribution = joint_distribution[:, Not(:compute_ipf)]
 
     return joint_distribution
@@ -127,9 +133,10 @@ function compute_joint_distributions(
     ipf_df2 = copy(dfs_for_ipf["ipf_df2"])
     ipf_merged_attributes = copy(dfs_for_ipf["ipf_merged_attributes"])
 
-    for df in [ipf_df1, ipf_df2, ipf_merged_attributes]
-        sort!(df, reverse(setdiff(names(df), [string(POPULATION_COLUMN)])))
-    end
+    # for df in [ipf_df1, ipf_df2, ipf_merged_attributes]
+    #     sort!(df, reverse(setdiff(names(df), [string(POPULATION_COLUMN)])))
+    #     println("SORT COLUMNS: ", reverse(setdiff(names(df), [string(POPULATION_COLUMN)])))
+    # end
 
     if nrow(ipf_df1) == 0 && nrow(ipf_df2) == nrow(ipf_merged_attributes)
         ipf_merged_attributes[:, POPULATION_COLUMN] = ipf_df2[:, POPULATION_COLUMN]

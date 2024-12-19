@@ -9,7 +9,7 @@ using SyntheticPopulation
 
 
 #each individual and each household represent 100.000 individuals or households
-SCALE = 0.0001 
+SCALE = 0.01 
 
 #all values are based on China census data
 individual_popoulation_size = 21890000
@@ -42,7 +42,7 @@ marginal_hh_size = DataFrame(
     )
 
 #generation of dataframe of individuals
-aggregated_individuals = generate_joint_distribution(marginal_ind_sex_maritalstatus, marginal_ind_income, marginal_ind_age_sex, config_file = "tutorial_notebooks/config_file.json")
+aggregated_individuals = generate_joint_distribution(marginal_ind_age_sex, marginal_ind_sex_maritalstatus, marginal_ind_income, config_file = "tutorial_notebooks/config_file.json")
 filter!(row -> row[SyntheticPopulation.POPULATION_COLUMN] >= 1, aggregated_individuals)
 aggregated_individuals.id = 1:nrow(aggregated_individuals)
 aggregated_individuals = add_indices_range_to_indiv(aggregated_individuals)

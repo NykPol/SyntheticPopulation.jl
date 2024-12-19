@@ -59,7 +59,7 @@ const AGE_COLUMN = :age
 const MARITALSTATUS_COLUMN = :maritalstatus
 const SEX_COLUMN = :sex
 #values
-const MINIMUM_ADULT_AGE = 15
+const MINIMUM_ADULT_AGE = 23
 const AVAILABLE_FOR_MARRIAGE = "Married"
 
 end # module

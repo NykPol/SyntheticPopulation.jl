@@ -6,7 +6,7 @@ using DataFrames
 using SyntheticPopulation
 
 #each individual and each household represent 100.000 individuals or households
-SCALE = 0.00003
+SCALE = 0.01
 
 #all values are based on China census data
 individual_popoulation_size = 8258035
@@ -61,18 +61,21 @@ marginal_ind_age_sex = DataFrame(
     age = repeat(2:5:87, outer=2), 
     population = SCALE * population
     )
-    
+
+
 marginal_ind_sex_maritalstatus = DataFrame(
     sex = repeat(['M', 'F'], 4), 
     maritalstatus = repeat(["Never_married", "Married", "Divorced", "Widowed"], inner = 2), 
     population = SCALE .* [1469519, 1536292, 1515237, 1470917, 205732, 341398, 75108, 286919]
     )
+    marginal_ind_sex_maritalstatus
 
 # 0.835 is a share of pop ages > [2, 7, 12]
 marginal_ind_income = DataFrame(
     income = [9999, 14999, 24999, 34999, 49999, 64999, 74999, 99999, 100000], 
     population = Int.(round.(SCALE * individual_popoulation_size * 0.835 .* [0.014, 0.014, 0.05, 0.093, 0.16, 0.139, 0.074, 0.144, 0.311]))
     )
+
 
 #households
 household_total_population = 3394750
@@ -81,8 +84,19 @@ marginal_hh_size = DataFrame(
     population = Int.(round.(SCALE * household_total_population .* [0.345, 0.297, 0.15, 0.209]))
     )
 
+
 #generation of dataframe of individuals
-aggregated_individuals = generate_joint_distribution(marginal_ind_sex_maritalstatus, marginal_ind_income, marginal_ind_age_sex, config_file = "tutorial_notebooks/config_file_NY.json")
+aggregated_individuals = generate_joint_distribution(marginal_ind_age_sex, marginal_ind_sex_maritalstatus,marginal_ind_income, config_file = "tutorial_notebooks/config_file_NY.json")
+
+# compare percentage structure of population of marginal_ind_sex_maritalstatus with aggregated_individuals
+percentage_structure_of_population = combine(groupby(aggregated_individuals, [:sex, :maritalstatus]), :population => sum => :population)
+percentage_structure_of_population[!,"prct_population"] = percentage_structure_of_population[!,"population"] ./ sum(percentage_structure_of_population[!,"population"]);
+percentage_structure_of_population
+
+
+marginal_ind_sex_maritalstatus[!,"prct_population"] = marginal_ind_sex_maritalstatus[!,"population"] ./ sum(marginal_ind_sex_maritalstatus[!,"population"]);
+marginal_ind_sex_maritalstatus
+
 filter!(row -> row[SyntheticPopulation.POPULATION_COLUMN] >= 1, aggregated_individuals)
 aggregated_individuals.id = 1:nrow(aggregated_individuals)
 aggregated_individuals = add_indices_range_to_indiv(aggregated_individuals)

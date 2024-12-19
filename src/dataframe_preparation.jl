@@ -71,8 +71,13 @@ function get_dictionary_dfs_for_ipf(df1::DataFrame, df2::DataFrame)
     
     names_df1 = setdiff(names(df1_copy), names(df2_copy))
     select!(merged_attributes, vcat(names_df1, names(df2_copy)))
-    sort!(merged_attributes, reverse(names(merged_attributes)))
+    #sort!(merged_attributes, reverse(names(merged_attributes)))
     
+    for df in [merged_attributes, df1, df2]
+        sort!(df, reverse(setdiff(names(df), [string(POPULATION_COLUMN)])))
+        println("SORT COLUMNS: ", reverse(setdiff(names(df), [string(POPULATION_COLUMN)])))
+    end
+
     dfs_for_ipf = Dict(
         "ipf_merged_attributes" => merged_attributes,
         "ipf_df1" => df1,
@@ -342,6 +347,8 @@ function merge_attributes(
     end
 
     dfs_dict["dfs_for_ipf"]["ipf_merged_attributes"] = merged_attributes
+
+
 
     return dfs_dict
 end
